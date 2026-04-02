@@ -487,8 +487,22 @@
             <div class="toolbar">
                 <h3>Detailed Data Table</h3>
                 <div class="view-switch">
-                    <button class="active" onclick="setTableMode('grouped', event)">Grouped</button>
+                    <button class="active" onclick="setTableMode('grouped', event)">All Rounds</button>
                     <button onclick="setTableMode('pct', event)">% Share</button>
+                    <button onclick="setTableMode('compare', event)">Compare</button>
+                </div>
+            </div>
+            <!-- Compare filter -->
+            <div id="compare-round-filter" class="compare-filter" style="display:none;">
+                <label>Base Round</label>
+                <select id="compare-round-a" class="filter-input" style="width:140px;text-align:left;" onchange="renderCompareAll()"></select>
+                <span style="color:var(--color-text-tertiary);font-weight:600;">vs</span>
+                <label>Compare Round</label>
+                <select id="compare-round-b" class="filter-input" style="width:140px;text-align:left;" onchange="renderCompareAll()"></select>
+            </div>
+            <div id="compare-chart-container" class="chart-container medium" style="display:none;">
+                <div class="chart-wrapper">
+                    <canvas id="chart-pct-change"></canvas>
                 </div>
             </div>
             <div id="table-container"></div>
@@ -6274,38 +6288,172 @@
         // ============================================================
         // DATA TABLE
         // ============================================================
+        function initCompareSelects() {
+            const selA = document.getElementById('compare-round-a');
+            const selB = document.getElementById('compare-round-b');
+            const opts = ROUNDS.map(r => `<option value="${r}">${formatRound(r)}</option>`).join('');
+            selA.innerHTML = opts;
+            selB.innerHTML = opts;
+            selA.value = ROUNDS[ROUNDS.length - 2] || ROUNDS[0];
+            selB.value = ROUNDS[ROUNDS.length - 1];
+        }
+
+        function renderCompareAll() {
+            renderPctChangeChart();
+            renderTable();
+        }
+
+        function renderPctChangeChart() {
+            const ctx = document.getElementById('chart-pct-change').getContext('2d');
+            const grouped = getGroupedData();
+            const rA = document.getElementById('compare-round-a').value;
+            const rB = document.getElementById('compare-round-b').value;
+            const valsA = grouped[rA] || GROUPS.map(() => 0);
+            const valsB = grouped[rB] || GROUPS.map(() => 0);
+
+            const labels = GROUPS.map(g => g.label);
+            const data = GROUPS.map((g, i) => {
+                const a = valsA[i], b = valsB[i];
+                if (a === 0) return b === 0 ? 0 : 100;
+                return ((b - a) / a) * 100;
+            });
+            const colors = data.map(v => v >= 0 ? '#16a34a' : '#dc2626');
+
+            if (charts.pctChange) charts.pctChange.destroy();
+
+            charts.pctChange = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: '% Change',
+                        data,
+                        backgroundColor: colors,
+                        borderRadius: 4,
+                        maxBarThickness: 40
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 300 },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#fff', titleColor: '#1f2937', bodyColor: '#6b7280',
+                            borderColor: '#e5e7eb', borderWidth: 1, cornerRadius: 8, padding: 12,
+                            titleFont: { family: 'Inter', weight: '600', size: 12 },
+                            bodyFont: { family: 'JetBrains Mono', size: 11 },
+                            callbacks: {
+                                label: (item) => {
+                                    const v = item.parsed.y;
+                                    return ` ${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            grid: { color: '#f5f5f5' },
+                            border: { display: false },
+                            ticks: { font: { family: 'JetBrains Mono', size: 10 }, color: '#bbb', callback: v => v + '%' }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { font: { family: 'Inter', size: 9 }, color: '#999', maxRotation: 45, minRotation: 45 }
+                        }
+                    }
+                }
+            });
+        }
+
         function renderTable() {
             const container = document.getElementById('table-container');
             const grouped = getGroupedData();
             const totals = getRoundTotals();
+            const filterEl = document.getElementById('compare-round-filter');
+            const chartEl = document.getElementById('compare-chart-container');
 
-            let html = `<table class="data-table"><thead><tr>
-                <th style="text-align:left">Group</th>
-                ${ROUNDS.map(r => `<th>${formatRound(r)}</th>`).join('')}
-            </tr></thead><tbody>`;
+            if (tableMode === 'compare') {
+                filterEl.style.display = 'flex';
+                chartEl.style.display = 'block';
+                renderPctChangeChart();
+                const rA = document.getElementById('compare-round-a').value;
+                const rB = document.getElementById('compare-round-b').value;
+                const valsA = grouped[rA] || GROUPS.map(() => 0);
+                const valsB = grouped[rB] || GROUPS.map(() => 0);
+                const totalA = valsA.reduce((s, v) => s + v, 0);
+                const totalB = valsB.reduce((s, v) => s + v, 0);
 
-            GROUPS.forEach((g, i) => {
-                html += `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${g.color};margin-right:6px;vertical-align:middle;"></span>${g.label}</td>`;
-                ROUNDS.forEach(r => {
-                    const val = grouped[r][i];
-                    if (tableMode === 'pct') {
-                        html += `<td>${(val / totals[r] * 100).toFixed(1)}%</td>`;
-                    } else {
-                        html += `<td>${formatNumber(val)}</td>`;
-                    }
+                let html = `<table class="data-table"><thead><tr>
+                    <th style="text-align:center;width:40px">#</th>
+                    <th style="text-align:left">Item Group</th>
+                    <th>${formatRound(rA)}</th>
+                    <th>${formatRound(rB)}</th>
+                    <th>Difference</th>
+                    <th>% Change</th>
+                </tr></thead><tbody>`;
+
+                GROUPS.forEach((g, i) => {
+                    const a = valsA[i], b = valsB[i];
+                    const diff = b - a;
+                    const pct = a === 0 ? (b === 0 ? null : null) : ((diff / a) * 100);
+                    const diffStr = diff === 0 && a === 0 && b === 0 ? '-' : (diff > 0 ? '+' : '') + formatNumber(diff);
+                    const pctStr = pct === null ? '-' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%';
+                    const diffColor = diff > 0 ? '#16a34a' : diff < 0 ? '#dc2626' : 'var(--color-text-tertiary)';
+
+                    html += `<tr>
+                        <td style="text-align:center;font-family:var(--font-sans);color:var(--color-text-tertiary)">${i + 1}</td>
+                        <td><strong>${g.label}</strong></td>
+                        <td>${formatNumber(a)}</td>
+                        <td>${formatNumber(b)}</td>
+                        <td style="color:${diffColor};font-weight:600">${diffStr}</td>
+                        <td style="color:${diffColor};font-weight:600">${pctStr}</td>
+                    </tr>`;
                 });
-                html += `</tr>`;
-            });
 
-            // Total row
-            html += `<tr class="total-row"><td>Total</td>`;
-            ROUNDS.forEach(r => {
-                html += `<td>${tableMode === 'pct' ? '100%' : formatNumber(totals[r])}</td>`;
-            });
-            html += `</tr>`;
+                const totalDiff = totalB - totalA;
+                const totalPct = totalA === 0 ? '-' : ((totalDiff / totalA) * 100).toFixed(2) + '%';
+                const totalDiffColor = totalDiff > 0 ? '#16a34a' : totalDiff < 0 ? '#dc2626' : 'var(--color-text-tertiary)';
+                html += `<tr class="total-row">
+                    <td style="text-align:center"></td>
+                    <td><strong>TOTAL</strong></td>
+                    <td>${formatNumber(totalA)}</td>
+                    <td>${formatNumber(totalB)}</td>
+                    <td style="color:${totalDiffColor};font-weight:700">${(totalDiff > 0 ? '+' : '') + formatNumber(totalDiff)}</td>
+                    <td style="color:${totalDiffColor};font-weight:700">${totalA === 0 ? '-' : (totalDiff > 0 ? '+' : '') + totalPct}</td>
+                </tr>`;
 
-            html += `</tbody></table>`;
-            container.innerHTML = html;
+                html += `</tbody></table>`;
+                container.innerHTML = html;
+            } else {
+                filterEl.style.display = 'none';
+                chartEl.style.display = 'none';
+                if (charts.pctChange) { charts.pctChange.destroy(); charts.pctChange = null; }
+
+                let html = `<table class="data-table"><thead><tr>
+                    <th style="text-align:left">Group</th>
+                    ${ROUNDS.map(r => `<th>${formatRound(r)}</th>`).join('')}
+                </tr></thead><tbody>`;
+
+                GROUPS.forEach((g, i) => {
+                    html += `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${g.color};margin-right:6px;vertical-align:middle;"></span>${g.label}</td>`;
+                    ROUNDS.forEach(r => {
+                        const val = grouped[r][i];
+                        if (tableMode === 'pct') {
+                            html += `<td>${(val / totals[r] * 100).toFixed(1)}%</td>`;
+                        } else {
+                            html += `<td>${formatNumber(val)}</td>`;
+                        }
+                    });
+                    html += `</tr>`;
+                });
+
+                html += `<tr class="total-row"><td>Total</td>`;
+                ROUNDS.forEach(r => { html += `<td>${tableMode === 'pct' ? '100%' : formatNumber(totals[r])}</td>`; });
+                html += `</tr></tbody></table>`;
+                container.innerHTML = html;
+            }
         }
 
         function setTableMode(mode, event) {
@@ -6420,6 +6568,7 @@
         // INIT
         // ============================================================
         document.addEventListener('DOMContentLoaded', () => {
+            initCompareSelects();
             renderStats();
             renderGroupToggles();
             renderTrendChart();
